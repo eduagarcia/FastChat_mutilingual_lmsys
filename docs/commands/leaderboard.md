@@ -1,3 +1,11 @@
+### Dependencies
+```
+pip install -e .
+pip install -e ".[webui]"
+```
+
+# With logs access
+"""
 ### Get logs
 ```
 gsutil -m rsync -r gs://fastchat_logs ~/fastchat_logs/
@@ -8,21 +16,35 @@ gsutil -m rsync -r gs://fastchat_logs ~/fastchat_logs/
 cd ~/FastChat/fastchat/serve/monitor
 python3 clean_battle_data.py
 ```
+"""
+
+# Without logs access
+"""
+### Get the notebook link from the original app.py:
+```
+https://huggingface.co/spaces/lmsys/chatbot-arena-leaderboard/blob/main/app.py
+#Line 13
+notebook_url = https://colab.research.google.com/drive/1KdwokPjirkTmpO_P1WByFNFiqxWQquwH#scrollTo=cWr1RMsqxWGg
+```
+
+### Get the google drive link for the clean_battle_DATE.json from the notebook
+```
+https://drive.google.com/file/d/1_72443egRzwRTmJfIyOQcf1ug7sKbqbX/view?usp=sharing
+#...
+cd fastchat/serve/monitor
+gdown --id 1_72443egRzwRTmJfIyOQcf1ug7sKbqbX
+```
+"""
 
 ### Run Elo analysis
 ```
-python3 elo_analysis.py --clean-battle-file clean_battle_20230905.json
+python3 elo_analysis.py --clean-battle-file clean_battle_20240329.json
 ```
 
 ### Copy files to HF space
-1. update plots
+1. Get lastest leaderboard_table
 ```
-scp atlas:/data/lmzheng/FastChat/fastchat/serve/monitor/elo_results_20230905.pkl .
-```
-
-2. update table
-```
-wget https://huggingface.co/spaces/lmsys/chatbot-arena-leaderboard/raw/main/leaderboard_table_20230905.csv
+wget https://huggingface.co/spaces/lmsys/chatbot-arena-leaderboard/raw/main/leaderboard_table_20240329.csv
 ```
 
 ### Update files on webserver

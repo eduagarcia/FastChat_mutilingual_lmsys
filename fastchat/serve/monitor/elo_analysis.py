@@ -111,7 +111,7 @@ def compute_elo_mle_with_tie(
     X = X[:cur_row]
     Y = Y[:cur_row]
 
-    lr = LogisticRegression(fit_intercept=False, penalty=None)
+    lr = LogisticRegression(fit_intercept=False, penalty=None, tol=1e-8)
     lr.fit(X, Y, sample_weight=sample_weights)
     elo_scores = SCALE * lr.coef_[0] + INIT_RATING
     if "mixtral-8x7b-instruct-v0.1" in models.index:
@@ -124,6 +124,29 @@ def get_median_elo_from_bootstrap(bootstrap_df):
     median = {k: int(v + 0.5) for k, v in median.items()}
     return median
 
+def compute_number_of_battles(battles):
+    a_win_ptbl = pd.pivot_table(
+        battles[battles['winner'] == "model_a"],
+        index="model_a", columns="model_b", aggfunc="size", fill_value=0)
+
+    # Table counting times each model wins as Model B
+    b_win_ptbl = pd.pivot_table(
+        battles[battles['winner'] == "model_b"],
+        index="model_a", columns="model_b", aggfunc="size", fill_value=0)
+    
+    tie_ptbl = pd.pivot_table(
+        battles[battles['winner'] == "tie"],
+        index="model_a", columns="model_b", aggfunc="size", fill_value=0)
+
+    tie_bad_ptbl = pd.pivot_table(
+        battles[battles['winner'] == "tie (bothbad)"],
+        index="model_a", columns="model_b", aggfunc="size", fill_value=0)
+
+    wins = a_win_ptbl.sum().add(b_win_ptbl.sum(), fill_value=0)
+    losses = b_win_ptbl.sum(axis=1).add(a_win_ptbl.sum(axis=1), fill_value=0)
+    ties = tie_ptbl.sum().add(tie_ptbl.sum(axis=1), fill_value=0)
+    ties_bad = tie_bad_ptbl.sum().add(tie_bad_ptbl.sum(axis=1), fill_value=0)
+    return wins, losses, ties, ties_bad
 
 def compute_pairwise_win_fraction(battles, model_order, limit_show_number=None):
     # Times each model wins as Model A
@@ -238,10 +261,10 @@ def visualize_battle_count(battles, model_order, scale=1):
 
 def visualize_average_win_rate(battles, limit_show_number, scale=1):
     row_beats_col_freq = compute_pairwise_win_fraction(
-        battles, None, limit_show_number=limit_show_number
+        battles, None, limit_show_number=None
     )
     fig = px.bar(
-        row_beats_col_freq.mean(axis=1).sort_values(ascending=False),
+        row_beats_col_freq.mean(axis=1).sort_values(ascending=False).iloc[:limit_show_number],
         text_auto=".2f",
         height=500 * scale,
         width=700 * scale,
@@ -279,6 +302,18 @@ def visualize_bootstrap_elo_rating(df, df_final, limit_show_number, scale=1):
         width=700 * scale,
     )
     fig.update_layout(xaxis_title="Model", yaxis_title="Rating")
+    return fig
+
+def visualize_inferred_languages(battles, limit_show_number, scale=1):
+    fig = px.bar(
+        battles["language"].value_counts().head(limit_show_number),
+        text_auto=True,
+        height=500 * scale,
+        width=700 * 2 * scale,
+    )
+    fig.update_layout(
+        yaxis_title="Count", xaxis_title="Language", showlegend=False
+    )
     return fig
 
 
@@ -477,6 +512,14 @@ def report_elo_analysis_results(
     model_rating_q025 = bootstrap_df.quantile(0.025)
     model_rating_q975 = bootstrap_df.quantile(0.975)
 
+    average_win_rate = compute_pairwise_win_fraction(
+        battles, None, limit_show_number=None
+    )
+    average_win_rate_no_tie = compute_pairwise_win_fraction(
+        battles_no_ties, None, limit_show_number=None
+    )
+    wins, losses, ties, ties_bad = compute_number_of_battles(battles)
+
     # compute ranking based on CI
     ranking = {}
     for i, model_a in enumerate(model_order):
@@ -498,8 +541,18 @@ def report_elo_analysis_results(
             .value_counts()
             .add(battles["model_b"].value_counts(), fill_value=0),
             "final_ranking": pd.Series(ranking),
+            "avg_win_rate": average_win_rate.mean(axis=1).fillna(0.0),
+            "avg_win_rate_no_tie": average_win_rate_no_tie.mean(axis=1).fillna(0.0),
+            "wins": wins,
+            "losses": losses,
+            "ties": ties,
+            "ties_bad": ties_bad,
         }
-    )
+    ).fillna(0)
+
+    #Remove models with only ties
+    models_no_ties = set(battles_no_ties["model_a"].unique()).union(set(battles_no_ties["model_b"].unique()))
+    model_order = [model for model in model_order if model in models_no_ties]
 
     model_order.sort(key=lambda k: -elo_rating_final[k])
     limit_show_number = int(25 * scale)
@@ -518,6 +571,9 @@ def report_elo_analysis_results(
     )
     bootstrap_elo_rating = visualize_bootstrap_elo_rating(
         bootstrap_df, elo_rating_final, limit_show_number, scale=scale
+    )
+    inferred_languages_bar = visualize_inferred_languages(
+        battles, 15, scale=scale
     )
 
     last_updated_tstamp = battles["tstamp"].max()
@@ -538,6 +594,9 @@ def report_elo_analysis_results(
         "last_updated_tstamp": last_updated_tstamp,
         "bootstrap_df": bootstrap_df,
         "leaderboard_table_df": leaderboard_table_df,
+        "inferred_languages": battles["language"].value_counts(),
+        "inferred_languages_bar": inferred_languages_bar
+
     }
 
 
@@ -577,18 +636,31 @@ if __name__ == "__main__":
         log_files = get_log_files(args.max_num_files)
         battles = clean_battle_data(log_files)
 
+
+
     filter_func_map = {
         "full": lambda x: True,
         "long": filter_long_conv,
-        "chinese": lambda x: x["language"] == "Chinese",
-        "english": lambda x: x["language"] == "English",
+        "non-english": lambda x: x["language"] != "English",
+        #"chinese": lambda x: x["language"] == "Chinese",
+        #"english": lambda x: x["language"] == "English",
+       
     }
+    #Add the top-15 available languages
+    for lang in battles[(battles["language"] != "unknown") & (battles["anony"])]["language"].value_counts().head(15).index:
+        filter_func_map[lang.lower()] = lambda x, k=lang: x["language"] == k
+    
+    if len(args.category) == 1 and args.category[0] == "all":
+        args.category = [f for f in filter_func_map.keys() if f != 'long']
+    #reverse
+    args.category = args.category[::-1]
     assert all(
         [cat in filter_func_map for cat in args.category]
     ), f"Invalid category: {args.category}"
 
     results = {}
     for cat in args.category:
+        print(f"Running analysis for {cat} conversations")
         filter_func = filter_func_map[cat]
         results[cat] = report_elo_analysis_results(
             battles,
